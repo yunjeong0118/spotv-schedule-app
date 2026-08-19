@@ -36,6 +36,21 @@ DAY_COLS_DEFAULT = [4, 6, 8, 10, 12, 14, 16]  # D,F,H,J,L,N,P
 # HH:MM은 있어도 없어도 되고, "생중계"/"생방송" 뒤에 이어지는 텍스트(있으면)를 4번째 그룹으로 잡는다.
 LIVE_MARKER_RE = re.compile(r'^\s*(?:(\d{1,2}):(\d{2})\s*)?(생중계|생방송)\s*(.*)$', re.S)
 
+# 팀:팀 대진정보, 라운드 코드(FR/1R/2R...), 단독 괄호 날짜 등은 테두리와 무관하게
+# 항상 "직전 항목에 이어붙이는 접미사"로 취급한다 (SPOTV2처럼 모든 셀에 테두리가
+# 일률적으로 있어서 테두리만으로는 항목 경계를 구분할 수 없는 파일들 때문에 필요).
+SUFFIX_TEAM_RE = re.compile(r'^[^:()\n]+:[^:()\n]+(\s*\([^()]*\))?\s*$')
+SUFFIX_PAREN_RE = re.compile(r'^\([^()]*\)\s*$')
+SUFFIX_ROUND_RE = re.compile(r'^(FR|\d{1,2}R)\s*$')
+
+
+def is_suffix_pattern(t):
+    if not t or len(t) > 25:
+        return False
+    if LIVE_MARKER_RE.match(t):
+        return False
+    return bool(SUFFIX_TEAM_RE.match(t) or SUFFIX_PAREN_RE.match(t) or SUFFIX_ROUND_RE.match(t))
+
 NS = {
     'xdr': 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing',
     'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
@@ -80,6 +95,14 @@ def _fillcat(cell):
         # 녹화중계, 본방송 -> 본방송
         if theme in (2, 7):
             return '본방송'
+    elif fg.type == 'rgb':
+        rgb = (fg.rgb or '').upper()
+        # 일부 파일에서 테마 대신 수동으로 지정된 RGB 색상이 섞여 나옴.
+        # 흰색(배경 없음과 동일 취급) = 재방송, 특정 살구색 = LIVE로 확인됨.
+        if rgb in ('FFFFFFFF', '00FFFFFF'):
+            return '재방송'
+        if rgb == 'FFE5B8B7':
+            return 'LIVE'
     return 'UNKNOWN'
 
 
@@ -210,6 +233,16 @@ def parse_schedule_grid(ws, day_cols=None, first_block_shift_minutes=30):
                 start_fresh = True
             elif not prev_had_content:
                 start_fresh = True
+            elif not pending['title_parts']:
+                # 직전 블록이 제목 없는 순수 마커(예: "05:35 생중계")였다면,
+                # 지금 블록은 테두리와 무관하게 그 마커의 제목이 된다.
+                start_fresh = False
+            elif is_live:
+                # 생중계/생방송 마커(시각 명시 여부 무관)는 항상 "새 편성 시작"이다.
+                start_fresh = True
+            elif is_suffix_pattern(ct2):
+                # 대진정보/라운드코드/단독 괄호는 테두리가 있어도 항상 직전 항목의 연속이다.
+                start_fresh = False
             else:
                 top = ws.cell(row=r1, column=col).border.top
                 bottom = ws.cell(row=prev_last_row, column=col).border.bottom
