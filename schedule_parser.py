@@ -38,6 +38,8 @@ def clean(text):
         return ''
     t = text.replace('\n', ' ')
     t = re.sub(r'\[HD\]', '', t)
+    # 연령고지(⑮ 등 원문자 등급 표기) 제거
+    t = re.sub(r'[\u2460-\u2473\u24EA\u3251-\u325F\u32B1-\u32BF]', '', t)
     t = re.sub(r'\s+', ' ', t).strip()
     return t
 
@@ -49,10 +51,12 @@ def _fillcat(cell):
     fg = fill.fgColor
     if fg.type == 'theme':
         theme = fg.theme
-        if theme == 7:
-            return '본방송'
+        # 현장생중계, 수신생중계 -> LIVE
         if theme in (3, 5):
             return 'LIVE'
+        # 녹화중계, 본방송 -> 본방송
+        if theme in (2, 7):
+            return '본방송'
     return 'UNKNOWN'
 
 
