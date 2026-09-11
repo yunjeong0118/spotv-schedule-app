@@ -10,13 +10,13 @@ SPOTV 주간 편성표(.xlsx) 파싱 → 업로드파일 데이터 변환 핵심
   4) 각 날짜 열의 첫 블록 top border가 없으면, 실제 방송 시작은 그리드상의 03:00이 아니라
      "전날(왼쪽) 열의 마지막 실제 편성이 끝나고 빈칸이 시작되는 시각"부터다.
      (전날 열이 없거나 전날 열이 끝까지 채워져 있으면 30분 앞당기는 것으로 대체 추정한다.)
-  5) 셀 텍스트에 "생중계"/"생방송"이라는 단어가 있으면(앞에 HH:MM이 붙어 있든 없든)
+  5) 셀 텍스트에 "생중계"/"생방송"/"녹화중계"라는 단어가 있으면(앞에 HH:MM이 붙어 있든 없든)
      - 그 단어(및 붙어있는 시각)는 프로그램명(str7)에서 반드시 제외한다.
-     - 방송구분(str8)은 LIVE로 확정한다.
+     - 방송구분(str8)은 생중계·생방송 -> LIVE, 녹화중계 -> 녹화방송 으로 확정한다.
      - 시각이 명시되어 있으면(HH:MM) 그 시각을 그대로 채택하고, 없으면 그리드 위치로 추정한다.
-  6) 방송구분(본방송/재방송/LIVE)은 기본적으로 셀 배경색(theme)으로 판정한다.
-     현장생중계·수신생중계=LIVE, 녹화중계·본방송=본방송, 배경없음=재방송.
-     단 5)의 생중계/생방송 텍스트가 있으면 색상과 무관하게 LIVE로 확정한다.
+  6) 방송구분은 기본적으로 셀 배경색(theme)으로 판정한다.
+     현장생중계·수신생중계=LIVE, 본방송=본방송, 녹화중계=녹화방송, 배경없음=재방송.
+     단 5)의 텍스트 마커가 있으면 색상과 무관하게 그 마커의 구분으로 확정한다.
   7) 자막(자)/해설(해)/수어(수) 표기는 셀 값이 아니라 도형(텍스트박스)이며,
      xlsx 내부의 xl/drawings/drawing*.xml 을 파싱해서 좌표로 매칭해야 한다.
   8) 연령고지 원문자(⑮ 등)는 프로그램명에서 제거한다.
@@ -33,8 +33,11 @@ import openpyxl
 
 DAY_COLS_DEFAULT = [4, 6, 8, 10, 12, 14, 16]  # D,F,H,J,L,N,P
 
-# HH:MM은 있어도 없어도 되고, "생중계"/"생방송" 뒤에 이어지는 텍스트(있으면)를 4번째 그룹으로 잡는다.
-LIVE_MARKER_RE = re.compile(r'^\s*(?:(\d{1,2}):(\d{2})\s*)?(생중계|생방송)\s*(.*)$', re.S)
+# HH:MM은 있어도 없어도 되고, "생중계"/"생방송"/"녹화중계" 뒤에 이어지는 텍스트(있으면)를
+# 4번째 그룹으로 잡는다. 이 세 단어는 프로그램명(str7)에 절대 들어가지 않고, 대신 방송구분
+# (str8)을 강제로 확정짓는 "상태 마커"다: 생중계·생방송 -> LIVE, 녹화중계 -> 녹화방송.
+STATUS_MARKER_RE = re.compile(r'^\s*(?:(\d{1,2}):(\d{2})\s*)?(생중계|생방송|녹화중계)\s*(.*)$', re.S)
+STATUS_MARKER_CAT = {'생중계': 'LIVE', '생방송': 'LIVE', '녹화중계': '녹화방송'}
 
 # 팀:팀 대진정보, 라운드 코드(FR/1R/2R...), 단독 괄호 날짜 등은 테두리와 무관하게
 # 항상 "직전 항목에 이어붙이는 접미사"로 취급한다 (SPOTV2처럼 모든 셀에 테두리가
@@ -47,7 +50,7 @@ SUFFIX_ROUND_RE = re.compile(r'^(FR|\d{1,2}R)\s*$')
 def is_suffix_pattern(t):
     if not t or len(t) > 25:
         return False
-    if LIVE_MARKER_RE.match(t):
+    if STATUS_MARKER_RE.match(t):
         return False
     return bool(SUFFIX_TEAM_RE.match(t) or SUFFIX_PAREN_RE.match(t) or SUFFIX_ROUND_RE.match(t))
 
@@ -68,18 +71,20 @@ def clean(text):
     return t
 
 
-def extract_live_marker(ct):
-    """정리된 텍스트에서 '생중계'/'생방송' 표기를 분리한다.
-    반환: (is_live, explicit_hour|None, explicit_minute|None, 나머지_텍스트)
-    나머지_텍스트에는 '생중계'/'생방송'과 그 앞의 HH:MM이 제거되어 있다.
+def extract_status_marker(ct):
+    """정리된 텍스트에서 '생중계'/'생방송'/'녹화중계' 표기를 분리한다.
+    반환: (forced_cat|None, explicit_hour|None, explicit_minute|None, 나머지_텍스트)
+    forced_cat은 매칭된 단어에 따라 'LIVE' 또는 '녹화방송', 매칭 안 되면 None.
+    나머지_텍스트에는 그 단어와 앞의 HH:MM이 제거되어 있다.
     """
-    m = LIVE_MARKER_RE.match(ct)
+    m = STATUS_MARKER_RE.match(ct)
     if not m:
-        return False, None, None, ct
+        return None, None, None, ct
     h = int(m.group(1)) if m.group(1) is not None else None
     mi = int(m.group(2)) if m.group(2) is not None else None
     trailing = m.group(4).strip()
-    return True, h, mi, trailing
+    forced_cat = STATUS_MARKER_CAT[m.group(3)]
+    return forced_cat, h, mi, trailing
 
 
 def _fillcat(cell):
@@ -92,9 +97,12 @@ def _fillcat(cell):
         # 현장생중계, 수신생중계 -> LIVE
         if theme in (3, 5):
             return 'LIVE'
-        # 녹화중계, 본방송 -> 본방송
-        if theme in (2, 7):
+        # 본방송
+        if theme == 7:
             return '본방송'
+        # 녹화중계 -> 녹화방송 (본방송과 별개 구분)
+        if theme == 2:
+            return '녹화방송'
     elif fg.type == 'rgb':
         rgb = (fg.rgb or '').upper()
         # 일부 파일에서 테마 대신 수동으로 지정된 RGB 색상이 섞여 나옴.
@@ -207,7 +215,7 @@ def parse_schedule_grid(ws, day_cols=None, first_block_shift_minutes=30):
             if pending and pending['title_parts']:
                 title = ' '.join(p for p in pending['title_parts'] if p).strip()
                 title = re.sub(r'\s+', ' ', title)
-                cat = 'LIVE' if pending.get('forced_live') else pending['cat']
+                cat = pending['forced_cat'] if pending.get('forced_cat') else pending['cat']
                 entries.append({
                     'date': basedate + timedelta(days=pending['extra_days']),
                     'hour': pending['h'], 'minute': pending['m'],
@@ -225,7 +233,7 @@ def parse_schedule_grid(ws, day_cols=None, first_block_shift_minutes=30):
                 prev_last_row = None
                 continue
             ct = clean(text)
-            is_live, ex_h, ex_m, ct2 = extract_live_marker(ct)
+            forced_cat, ex_h, ex_m, ct2 = extract_status_marker(ct)
             is_first_block = not first_block_seen
             first_block_seen = True
 
@@ -234,11 +242,11 @@ def parse_schedule_grid(ws, day_cols=None, first_block_shift_minutes=30):
             elif not prev_had_content:
                 start_fresh = True
             elif not pending['title_parts']:
-                # 직전 블록이 제목 없는 순수 마커(예: "05:35 생중계")였다면,
+                # 직전 블록이 제목 없는 순수 마커(예: "05:35 생중계", "녹화중계")였다면,
                 # 지금 블록은 테두리와 무관하게 그 마커의 제목이 된다.
                 start_fresh = False
-            elif is_live:
-                # 생중계/생방송 마커(시각 명시 여부 무관)는 항상 "새 편성 시작"이다.
+            elif forced_cat:
+                # 생중계/생방송/녹화중계 마커(시각 명시 여부 무관)는 항상 "새 편성 시작"이다.
                 start_fresh = True
             elif is_suffix_pattern(ct2):
                 # 대진정보/라운드코드/단독 괄호는 테두리가 있어도 항상 직전 항목의 연속이다.
@@ -263,13 +271,13 @@ def parse_schedule_grid(ws, day_cols=None, first_block_shift_minutes=30):
                             h, mnt, extra = _shift_back(h, mnt, extra, first_block_shift_minutes)
                             needs_review = True
                 pending = {'title_parts': [ct2] if ct2 else [], 'cat': cat,
-                           'forced_live': is_live, 'needs_review': needs_review,
+                           'forced_cat': forced_cat, 'needs_review': needs_review,
                            'h': h, 'm': mnt, 'extra_days': extra, 'rows': [(r1, r2)]}
             else:
                 if ct2:
                     pending['title_parts'].append(ct2)
-                if is_live:
-                    pending['forced_live'] = True
+                if forced_cat:
+                    pending['forced_cat'] = forced_cat
                 pending['rows'].append((r1, r2))
 
             prev_had_content = True
