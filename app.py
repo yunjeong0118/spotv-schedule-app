@@ -148,10 +148,13 @@ elif mode.startswith("채널별"):
                 rep['name'] = sf.name
                 reports.append(rep)
             except Exception as e:
-                st.error(f"{sf.name} 적용 실패: {e}")
+                reports.append({'name': sf.name, 'error': str(e)})
         st.session_state[skey + "::report"] = reports
         st.rerun()
     for rep in (st.session_state.get(skey + "::report") or []):
+        if rep.get('error'):
+            st.error(f"{rep['name']} 적용 실패: {rep['error']}")
+            continue
         s0, e0 = rep['window']
         c = rep['counts']
         st.success(f"{rep['name']} 적용 — {s0:%m/%d %H:%M} ~ {e0:%m/%d %H:%M} · "
@@ -159,6 +162,8 @@ elif mode.startswith("채널별"):
                       else f"추가 {c['ADDED']} / 삭제 {c['REMOVED']} / 변경 {c['CHANGED']}"))
         for n in rep['notes']:
             st.warning(n)
+        if not rep['first_apply'] and not rep['changes']:
+            st.info("이미 마스터에 반영된 내용과 동일합니다 (변경 없음).")
         if not rep['first_apply'] and rep['changes']:
             in_win = lambda e: s0 <= entry_dt(e) < e0
             new_sorted = sorted([e for e in master['entries'] if in_win(e)], key=entry_dt)

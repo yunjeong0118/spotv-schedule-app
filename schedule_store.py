@@ -32,6 +32,7 @@ CHANNELS = {
     'SPOTV Prime+': {'bases': [0]},
 }
 
+GRID_END_HOUR = 3   # 주 파일의 끝: 다음 주 월요일 03:00 (편성표 기준, 모든 버전 공통)
 MASTER_SHEET = '마스터'
 LOG_SHEET = '적용이력'
 INFO_SHEET = '정보'
@@ -93,6 +94,13 @@ def new_master(channel):
     return {'channel': channel, 'entries': [], 'log': []}
 
 
+def _to_dt(v):
+    """문자열('2026-08-17 03:00') 또는 엑셀 날짜값 모두 허용."""
+    if isinstance(v, datetime):
+        return v
+    return datetime.strptime(str(v).strip()[:16], DT_FMT)
+
+
 def load_master(file_bytes):
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     channel = None
@@ -100,6 +108,8 @@ def load_master(file_bytes):
         v = wb[INFO_SHEET].cell(row=1, column=2).value
         channel = str(v) if v else None
     entries = []
+    if MASTER_SHEET not in wb.sheetnames:
+        raise ValueError("'마스터' 시트가 없습니다. 이 앱에서 다운로드한 누적 마스터 파일이 아닙니다 (주차 업로드파일이 아닌지 확인해주세요).")
     ws = wb[MASTER_SHEET]
     for row in ws.iter_rows(min_row=2, values_only=True):
         if row[1] is None:
@@ -121,9 +131,9 @@ def load_master(file_bytes):
             if not r[0]:
                 continue
             log.append({
-                'applied_at': r[0], 'source': r[1],
-                'start': datetime.strptime(r[2], DT_FMT), 'end': datetime.strptime(r[3], DT_FMT),
-                'added': r[4], 'removed': r[5], 'changed': r[6],
+                'applied_at': str(r[0]), 'source': r[1],
+                'start': _to_dt(r[2]), 'end': _to_dt(r[3]),
+                'added': r[4] or 0, 'removed': r[5] or 0, 'changed': r[6] or 0,
             })
     return {'channel': channel, 'entries': entries, 'log': log}
 
@@ -260,13 +270,25 @@ def missing_intervals(master, start, end):
 
 
 def slice_week(master, monday, base_hour):
-    """월요일 + base_hour 부터 7일치 항목과 점검 정보를 반환."""
-    start = datetime.combine(monday, datetime.min.time()) + timedelta(hours=base_hour)
-    end = start + timedelta(days=7)
+    """주 파일 구간을 마스터에서 잘라 반환.
+    - 시작: 월요일 + base_hour (03:00 버전은 월 03:00, 00:00 버전은 월 00:00)
+    - 끝  : 항상 다음 주 월요일 03:00 (편성표 기준) — 03:00 이전의 편성은 모두 포함
+    - 00:00 버전: 월 00:00에 이미 방송 중인 직전(일요일 밤) 편성도 첫 행으로 포함
+    """
+    mon0 = datetime.combine(monday, datetime.min.time())
+    start = mon0 + timedelta(hours=base_hour)
+    end = mon0 + timedelta(days=7, hours=GRID_END_HOUR)
     entries = sorted([e for e in master['entries'] if start <= entry_dt(e) < end], key=entry_dt)
-    gaps = missing_intervals(master, start, end)
     notes = []
-    if entries and entry_dt(entries[0]) > start and not gaps:
+    if base_hour < GRID_END_HOUR:
+        prev = [e for e in master['entries'] if entry_dt(e) < start]
+        if prev:
+            p = max(prev, key=entry_dt)
+            if not entries or entry_dt(entries[0]) > start:
+                entries.insert(0, p)
+                notes.append(f"{start:%m/%d %H:%M}에 방송 중인 직전 편성 [{entry_dt(p):%m/%d %H:%M} 시작] {p['title']} 을(를) 첫 행으로 포함했습니다. 확인해주세요.")
+    gaps = missing_intervals(master, start, end)
+    if base_hour >= GRID_END_HOUR and entries and entry_dt(entries[0]) > start and not gaps:
         prev = [e for e in master['entries'] if entry_dt(e) < start]
         if prev:
             p = max(prev, key=entry_dt)
