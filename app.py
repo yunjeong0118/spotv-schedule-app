@@ -99,12 +99,19 @@ elif mode.startswith("채널별"):
     st.subheader("채널별 누적 마스터 · 주차 파일 생성")
     st.caption("편성표를 올릴 때마다 채널 마스터에 쌓고, 원하는 주(월요일 기준)·기준시각으로 잘라 업로드파일을 만듭니다.")
 
+    rst = st.session_state.get("rst", 0)
+    if st.button("🔄 새로고침 (적용 내역·업로드 파일 모두 지우기)"):
+        for k in [k for k in st.session_state if str(k).startswith("master::")]:
+            del st.session_state[k]
+        st.session_state["rst"] = rst + 1
+        st.rerun()
+
     channel = st.selectbox("채널", list(store.CHANNELS.keys()))
     bases = store.CHANNELS[channel]['bases']
     st.caption("작성 기준 시각: " + " / ".join(f"{b:02d}:00" for b in bases) + (" (2가지 버전 생성)" if len(bases) > 1 else ""))
 
     st.markdown("**1) 마스터 불러오기** — 처음이면 비워두세요")
-    master_file = st.file_uploader("해당 채널의 누적 마스터(.xlsx)", type=["xlsx"], key="master")
+    master_file = st.file_uploader("해당 채널의 누적 마스터(.xlsx)", type=["xlsx"], key=f"master_{rst}")
 
     skey = f"master::{channel}"
     fid = (master_file.name, master_file.size) if master_file else None
@@ -129,7 +136,7 @@ elif mode.startswith("채널별"):
             + (f" · 적용 구간 {', '.join(store.fmt_gap(c) for c in store.coverage(master))}" if master['log'] else ""))
 
     st.markdown("**2) 편성표 적용** — 해당 주 구간이 통째로 교체됩니다(변경 편성표 재적용 = 개정). 다른 주는 그대로입니다. 여러 파일은 파일명 순(날짜 순)으로 적용됩니다.")
-    sched_files = st.file_uploader("주간 편성표(.xlsx)", type=["xlsx"], key="store_sched", accept_multiple_files=True)
+    sched_files = st.file_uploader("주간 편성표(.xlsx)", type=["xlsx"], key=f"store_sched_{rst}", accept_multiple_files=True)
     if sched_files and st.button("마스터에 적용"):
         reports = []
         for sf in sorted(sched_files, key=lambda f: f.name):  # 파일명(YYMMDD) 순, 나중 파일이 우선
@@ -143,6 +150,7 @@ elif mode.startswith("채널별"):
             except Exception as e:
                 st.error(f"{sf.name} 적용 실패: {e}")
         st.session_state[skey + "::report"] = reports
+        st.rerun()
     for rep in (st.session_state.get(skey + "::report") or []):
         s0, e0 = rep['window']
         c = rep['counts']
