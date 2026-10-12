@@ -9,7 +9,7 @@
 - 커버리지(적용 구간)를 기록해, 잘라낸 구간에 데이터가 없는 부분(누락)을 알려준다.
 """
 import io
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill
@@ -37,6 +37,14 @@ MASTER_SHEET = '마스터'
 LOG_SHEET = '적용이력'
 INFO_SHEET = '정보'
 DT_FMT = '%Y-%m-%d %H:%M'
+
+
+def now_kst():
+    return datetime.now(timezone(timedelta(hours=9)))
+
+
+def today_kst():
+    return now_kst().date()
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +202,7 @@ def apply_schedule(master, new_entries, window, source, applied_at=None):
     """마스터의 window 구간 데이터를 new_entries로 교체한다. 구간 밖은 보존.
     반환: (report dict). master는 제자리에서 갱신된다.
     """
-    applied_at = applied_at or datetime.now().strftime(DT_FMT)
+    applied_at = applied_at or now_kst().strftime(DT_FMT)
     start, end = window
     notes = []
 

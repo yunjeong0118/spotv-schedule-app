@@ -174,7 +174,7 @@ elif mode.startswith("채널별"):
     if master['entries']:
         ch_name = channel.replace(" ", "_")
         st.download_button("📥 갱신된 마스터 다운로드 (다음에 다시 올려 쓰세요)", data=store.master_bytes(master),
-                           file_name=f"{ch_name}_누적마스터.xlsx",
+                           file_name=f"{store.today_kst():%y%m%d}_{ch_name}_누적마스터.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         st.markdown("**3) 주차 파일 생성**")
